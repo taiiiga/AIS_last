@@ -7,6 +7,12 @@ import re
 import os
 import sys
 
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.chrome.options import Options
+
 os.system('chcp 65001')
 
 URL = 'https://torgi.gov.ru/'
@@ -33,6 +39,7 @@ def separate_capital_words(words):
     new_words = re.findall('[А-Я][^А-Я]*', words)
     return new_words
 
+
 def clear(arr):
     array = []
     word = arr[0]
@@ -44,6 +51,7 @@ def clear(arr):
             word = arr[i]
             array.append(word)
     return array
+
 
 # Функции для первого уровня
 def get_main(soup):
@@ -93,8 +101,12 @@ def get_list(soup):
                 buffer.append(td.find('span').find('a', title='Просмотр').get('href'))
                 print('url:', td.find('span').find('a', title='Просмотр').get('href'))
             elif td.find('span').find('span') is not None:
-                buffer.append(td.find('span').find('span').get_text())
-                print('1:', td.find('span').find('span').get_text())
+                try:
+                    buffer.append(td.find('span').find('span').get_text())
+                    print('1:', td.find('span').find('span').get_text())
+                except:
+                    buffer.append(td.find('span').find('span').get_text().encode('utf-8'))
+                    print('1:', td.find('span').find('span').get_text().encode('utf-8'))
             elif td.find('span') is not None:
                 buffer.append(td.find('span').get_text())
                 print('2:', td.find('span').get_text())
@@ -102,7 +114,7 @@ def get_list(soup):
         slot = {}
         slot.update({'url': buffer[0]})
         for i in range(len(new_head)):
-            print(new_head[i] + ' - ' + buffer[i + 1])
+            #print(new_head[i] + ' - ' + buffer[i + 1])
             slot.update({new_head[i]: buffer[i + 1]})
         lots.append(slot)
     print('ИТОГ:', len(lots))
@@ -131,6 +143,15 @@ def get_deal(soup):
     return text
 
 
+def get_pages(soup):
+    try:
+        pages = int(soup.find('a', title='Перейти на последнюю страницу').find('span').get_text())
+    except:
+        pages = 1
+    print(pages)
+    return pages
+
+
 def parse(url, level):
     html = get_html(url)
     if html.status_code == 200:
@@ -140,11 +161,17 @@ def parse(url, level):
             return get_list(get_content(html.text))
         elif level == 3:
             return get_deal(get_content(html.text))
+        elif level == 4:
+            return get_pages(get_content(html.text))
     else:
         print("Ошибка")
 
 
 class Menu(QMainWindow):
+    page_prev = False
+    page_next = True
+    pages_number = 0
+    current_page = 1
     dict = {}
     buttons = []
     sections = []
@@ -153,6 +180,7 @@ class Menu(QMainWindow):
     table_columns = 0
     table_rows = 0
     url = ''
+    bo = False
 
     def __init__(self):
         super(Menu, self).__init__()
@@ -160,6 +188,10 @@ class Menu(QMainWindow):
         self.torgi = QLabel(self)
         self.comboBox = QComboBox(self)
         self.initUI()
+        opts = Options()
+        opts.headless = True
+        assert opts.headless
+        self.driver = webdriver.Chrome('C:/javaLib/chromedriver.exe', options=opts)
 
     def initUI(self):
         self.setGeometry(200, 200, 800, 470)
@@ -192,21 +224,34 @@ class Menu(QMainWindow):
             button.clicked.connect(self.to_deal)
             self.buttons.append(button)
 
-        prev_button = QPushButton(self)
-        prev_button.setText('Предыдущая страница')
-        prev_button.setGeometry(80, 430, 200, 25)
-        prev_button.setEnabled(False)
+        self.prev_button = QPushButton(self)
+        self.prev_button.setText('Предыдущая страница')
+        self.prev_button.setGeometry(80, 430, 200, 25)
+        self.prev_button.setEnabled(False)
+        self.prev_button.clicked.connect(self.to_prev)
 
-        next_button = QPushButton(self)
-        next_button.setText('Следующая страница')
-        next_button.setGeometry(580, 430, 200, 25)
-        next_button.setEnabled(False)
+        self.next_button = QPushButton(self)
+        self.next_button.setText('Следующая страница')
+        self.next_button.setGeometry(580, 430, 200, 25)
+        self.next_button.setEnabled(True)
+        self.next_button.clicked.connect(self.to_next)
 
         self.to_section()
 
+    def closeEvent(self, event):
+        self.driver.quit()
+
     # Парсим список лотов
     def to_section(self):
-        self.lots = parse(URL + self.sections[self.dict.get(self.comboBox.currentText())].get('url'), 2)
+        self.url = URL + self.sections[self.dict.get(self.comboBox.currentText())].get('url')
+        self.current_page = 1
+        self.lots = parse(self.url, 2)
+        self.pages_number = parse(self.url, 4)
+        self.bo = False
+        if self.current_page == self.pages_number:
+            self.next_button.setEnabled(False)
+        else:
+            self.next_button.setEnabled(True)
 
         keys = []
         if len(self.lots) != 0:
@@ -231,7 +276,7 @@ class Menu(QMainWindow):
         for row in range(self.table_rows):
             col = 0
             for column in keys:
-                self.table.setItem(row, col, QTableWidgetItem(self.lots[row].get(column)))
+                self.table.setItem(row, col, QTableWidgetItem(str(self.lots[row].get(column))))
                 col += 1
         self.table.setWordWrap(True)
 
@@ -244,6 +289,99 @@ class Menu(QMainWindow):
     def show_deal(self, url):
         self.w = Deal(url)
         self.w.show()
+
+    def to_prev(self):
+        self.get_sel('prev')
+        self.next_button.setEnabled(True)
+        self.current_page -= 1
+        if self.current_page == 1:
+            self.prev_button.setEnabled(False)
+
+    def to_next(self):
+        self.get_sel('next')
+        self.prev_button.setEnabled(True)
+        self.current_page += 1
+        if self.current_page == self.pages_number:
+            self.next_button.setEnabled(False)
+
+    def get_sel(self, button):
+        if not self.bo:
+            self.driver.get(self.url)
+            self.bo = True
+        if button == 'prev':
+            prev_button = self.driver.find_element_by_xpath('//*[@title="Перейти на одну страницу назад"]')
+            prev_button.click()
+            WebDriverWait(self.driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, "//*[@id='over'][contains(@style, 'display: block')]")))
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//*[@id='over'][contains(@style, 'display: none')]")))
+            req = self.driver.page_source
+            self.url = self.driver.current_url
+            self.lots = get_list(get_content(req))
+
+            keys = []
+            if len(self.lots) != 0:
+                for item in self.lots[0].keys():
+                    keys.append(item)
+                keys = keys[1:]
+
+            self.table_columns = 8
+            self.table_rows = len(self.lots)
+            self.table.setColumnCount(self.table_columns)
+            self.table.setRowCount(self.table_rows)
+            self.table.setHorizontalHeaderLabels(keys)
+
+            for i in range(self.table_rows):
+                self.buttons[i].setEnabled(True)
+                self.buttons[i].setVisible(True)
+
+            for i in range(self.table_rows, 10):
+                self.buttons[i].setEnabled(False)
+                self.buttons[i].setVisible(False)
+
+            for row in range(self.table_rows):
+                col = 0
+                for column in keys:
+                    self.table.setItem(row, col, QTableWidgetItem(str(self.lots[row].get(column))))
+                    col += 1
+            self.table.setWordWrap(True)
+        elif button == 'next':
+            next_button = self.driver.find_element_by_xpath('//*[@title="Перейти на одну страницу вперед"]')
+            next_button.click()
+            WebDriverWait(self.driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, "//*[@id='over'][contains(@style, 'display: block')]")))
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//*[@id='over'][contains(@style, 'display: none')]")))
+            req = self.driver.page_source
+            self.url = self.driver.current_url
+            self.lots = get_list(get_content(req))
+
+            keys = []
+            if len(self.lots) != 0:
+                for item in self.lots[0].keys():
+                    keys.append(item)
+                keys = keys[1:]
+
+            self.table_columns = 8
+            self.table_rows = len(self.lots)
+            self.table.setColumnCount(self.table_columns)
+            self.table.setRowCount(self.table_rows)
+            self.table.setHorizontalHeaderLabels(keys)
+
+            for i in range(self.table_rows):
+                self.buttons[i].setEnabled(True)
+                self.buttons[i].setVisible(True)
+
+            for i in range(self.table_rows, 10):
+                self.buttons[i].setEnabled(False)
+                self.buttons[i].setVisible(False)
+
+            for row in range(self.table_rows):
+                col = 0
+                for column in keys:
+                    self.table.setItem(row, col, QTableWidgetItem(str(self.lots[row].get(column))))
+                    col += 1
+            self.table.setWordWrap(True)
 
 
 class Deal(QMainWindow):
@@ -283,6 +421,7 @@ class Deal(QMainWindow):
                 count += 1
         self.table.setWordWrap(True)
 
+
 def menu():
     app = QApplication(sys.argv)
     m = Menu()
@@ -291,3 +430,4 @@ def menu():
 
 
 menu()
+
